@@ -1,1 +1,89 @@
-谷田部
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>地図に書き込める掲示板</title>
+
+  <!-- Leaflet -->
+  <link
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+  />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+  <style>
+    body {
+      margin: 0;
+      font-family: sans-serif;
+    }
+    #map {
+      height: 100vh;
+    }
+    .popup-form textarea {
+      width: 200px;
+      height: 60px;
+    }
+    .popup-form button {
+      margin-top: 5px;
+      width: 100%;
+    }
+  </style>
+</head>
+<body>
+
+<div id="map"></div>
+
+<script>
+  // 地図初期化（東京）
+  const map = L.map("map").setView([35.681236, 139.767125], 13);
+
+  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    attribution: "© OpenStreetMap contributors"
+  }).addTo(map);
+
+  // 保存データ読み込み
+  const posts = JSON.parse(localStorage.getItem("mapPosts") || "[]");
+
+  // 既存投稿を表示
+  posts.forEach(post => {
+    L.marker([post.lat, post.lng])
+      .addTo(map)
+      .bindPopup(post.text);
+  });
+
+  // 地図クリック時
+  map.on("click", e => {
+    const popupContent = `
+      <div class="popup-form">
+        <textarea id="postText" placeholder="ここに書き込む"></textarea>
+        <button onclick="savePost(${e.latlng.lat}, ${e.latlng.lng})">
+          投稿
+        </button>
+      </div>
+    `;
+    L.popup()
+      .setLatLng(e.latlng)
+      .setContent(popupContent)
+      .openOn(map);
+  });
+
+  // 投稿保存
+  window.savePost = function(lat, lng) {
+    const text = document.getElementById("postText").value;
+    if (!text) return;
+
+    const post = { lat, lng, text };
+    posts.push(post);
+    localStorage.setItem("mapPosts", JSON.stringify(posts));
+
+    L.marker([lat, lng])
+      .addTo(map)
+      .bindPopup(text)
+      .openPopup();
+
+    map.closePopup();
+  };
+</script>
+
+</body>
+</html>
