@@ -11,60 +11,157 @@
 <!-- Firebase -->
 <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
 
 <style>
-  body { margin: 0; }
+  body { margin: 0; font-family: sans-serif; }
   #map { height: 100vh; }
-  textarea { width: 200px; height: 60px; }
+
+  #auth {
+    position: absolute;
+    top: 10px;
+    left: 10px;
+    background: white;
+    padding: 10px;
+    z-index: 1000;
+    border-radius: 6px;
+    box-shadow: 0 0 5px rgba(0,0,0,0.3);
+  }
+
+  textarea {
+    width: 200px;
+    height: 80px;
+  }
 </style>
 </head>
 <body>
 
+<div id="auth">
+  <h3>ログイン / 新規登録</h3>
+  <input id="email" type="email" placeholder="メールアドレス"><br>
+  <input id="password" type="password" placeholder="パスワード"><br>
+  <button onclick="login()">ログイン</button>
+  <button onclick="signup()">新規登録</button>
+  <p id="userInfo">ログインしていません</p>
+</div>
+
 <div id="map"></div>
 
 <script>
-/* 🔥 Firebase設定（自分のに置き換え） */
+/* 🔥 Firebase設定 */
 const firebaseConfig = {
-  apiKey: "AIzaSyCe_0TVZeUqhxjd7UFflZ-dUamIehU7KWA",
-  authDomain: "tankyu-6db3a.firebaseapp.com",
-  projectId: "tankyu-6db3a",
-  storageBucket: "tankyu-6db3a.firebasestorage.app",
-  messagingSenderId: "127226146209",
-  appId: "1:127226146209:web:8b20840d3a325191c86fe0"
+  apiKey: "AIzaSyCe_0TVZeUqhxjd7UFflZ-dUamIehU7KWA",
+  authDomain: "tankyu-6db3a.firebaseapp.com",
+  projectId: "tankyu-6db3a",
+  storageBucket: "tankyu-6db3a.firebasestorage.app",
+  messagingSenderId: "127226146209",
+  appId: "1:127226146209:web:8b20840d3a325191c86fe0"
 };
 
 firebase.initializeApp(firebaseConfig);
+
 const db = firebase.firestore();
+const auth = firebase.auth();
+let currentUser = null;
+
+/* 👤 認証状態監視 */
+auth.onAuthStateChanged(user => {
+  const info = document.getElementById("userInfo");
+  if (user) {
+    currentUser = user;
+    info.textContent = `ログイン中：${user.email}`;
+  } else {
+    currentUser = null;
+    info.textContent = "ログインしていません";
+  }
+});
+
+/* 🔑 新規登録 */
+function signup() {
+  const email = document.getElementById("email").value;
+  const password = document.getElementById("password").value;
+
+  auth.createUserWithEmailAndPassword(email, password)
+    .then(() => alert("新規登録成功！"))
+    .catch(e => alert(e.message));
+}
+
+/* 🔑 ログイン */
+function login() {
+  const email = document.getElementById("email").value;
+  const password = document.getElementById("password").value;
+
+  auth.signInWithEmailAndPassword(email, password)
+    .then(() => alert("ログイン成功！"))
+    .catch(e => alert(e.message));
+}
 
 /* 🗺️ 地図 */
-const map = L.map("map").setView([36.3659, 140.4710], 15);
-L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png").addTo(map);
+const map = L.map("map").setView([36.3659, 140.4710], 14);
+L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png")
+  .addTo(map);
 
-/* 📥 Firestoreから投稿取得 */
+/* 📍 マーカー管理 */
+const markers = {};
+
+/* 📥 投稿表示（削除ボタン付き） */
 db.collection("posts").onSnapshot(snapshot => {
   snapshot.docChanges().forEach(change => {
+    const docId = change.doc.id;
+
     if (change.type === "added") {
       const data = change.doc.data();
-      L.marker([data.lat, data.lng])
+
+      let popupContent = `<p>${data.text}</p>`;
+
+      // 👤 自分の投稿だけ削除可能
+      if (currentUser && data.uid === currentUser.uid) {
+        popupContent += `
+          <button onclick="deletePost('${docId}')">
+            削除
+          </button>
+        `;
+      }
+
+      const marker = L.marker([data.lat, data.lng])
         .addTo(map)
-        .bindPopup(data.text);
+        .bindPopup(popupContent);
+
+      markers[docId] = marker;
+    }
+
+    if (change.type === "removed") {
+      if (markers[docId]) {
+        map.removeLayer(markers[docId]);
+        delete markers[docId];
+      }
     }
   });
 });
 
-/* 🖱️ 地図クリック */
+/* 🖱️ 地図クリック（ログイン必須） */
 map.on("click", e => {
+  if (!currentUser) {
+    alert("投稿するにはログイン（新規登録）が必要です");
+    return;
+  }
+
   const popup = `
     <textarea id="text"></textarea><br>
     <button onclick="savePost(${e.latlng.lat}, ${e.latlng.lng})">
       投稿
     </button>
   `;
-  L.popup().setLatLng(e.latlng).setContent(popup).openOn(map);
+  L.popup()
+    .setLatLng(e.latlng)
+    .setContent(popup)
+    .openOn(map);
 });
 
 /* 💾 投稿保存 */
 function savePost(lat, lng) {
+  if (!currentUser) return;
+
   const text = document.getElementById("text").value;
   if (!text) return;
 
@@ -72,10 +169,21 @@ function savePost(lat, lng) {
     lat: lat,
     lng: lng,
     text: text,
+    uid: currentUser.uid,
     createdAt: firebase.firestore.FieldValue.serverTimestamp()
   });
 
   map.closePopup();
+}
+
+/* 🗑️ 投稿削除（本人のみ） */
+function deletePost(postId) {
+  if (!currentUser) return;
+
+  if (!confirm("この投稿を削除しますか？")) return;
+
+  db.collection("posts").doc(postId).delete()
+    .catch(e => alert("削除できません"));
 }
 </script>
 
