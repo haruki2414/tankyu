@@ -29,8 +29,18 @@
   }
 
   textarea {
-    width: 200px;
+    width: 220px;
     height: 80px;
+  }
+
+  .time {
+    font-size: 12px;
+    color: #666;
+    margin-top: 4px;
+  }
+
+  button {
+    margin-top: 4px;
   }
 </style>
 </head>
@@ -78,21 +88,13 @@ auth.onAuthStateChanged(user => {
 
 /* 🔑 新規登録 */
 function signup() {
-  const email = document.getElementById("email").value;
-  const password = document.getElementById("password").value;
-
-  auth.createUserWithEmailAndPassword(email, password)
-    .then(() => alert("新規登録成功！"))
+  auth.createUserWithEmailAndPassword(email.value, password.value)
     .catch(e => alert(e.message));
 }
 
 /* 🔑 ログイン */
 function login() {
-  const email = document.getElementById("email").value;
-  const password = document.getElementById("password").value;
-
-  auth.signInWithEmailAndPassword(email, password)
-    .then(() => alert("ログイン成功！"))
+  auth.signInWithEmailAndPassword(email.value, password.value)
     .catch(e => alert(e.message));
 }
 
@@ -104,71 +106,79 @@ L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png")
 /* 📍 マーカー管理 */
 const markers = {};
 
-/* 📥 投稿表示（削除ボタン付き） */
+/* 🕒 日時フォーマット関数 */
+function formatDate(timestamp) {
+  if (!timestamp) return "";
+  const d = timestamp.toDate();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  const h = String(d.getHours()).padStart(2, "0");
+  const min = String(d.getMinutes()).padStart(2, "0");
+  return `${y}/${m}/${day} ${h}:${min}`;
+}
+
+/* 📥 投稿表示（日時・編集・削除） */
 db.collection("posts").onSnapshot(snapshot => {
   snapshot.docChanges().forEach(change => {
-    const docId = change.doc.id;
+    const id = change.doc.id;
 
-    if (change.type === "added") {
-      const data = change.doc.data();
+    if (change.type === "added" || change.type === "modified") {
+      const d = change.doc.data();
 
-      let popupContent = `<p>${data.text}</p>`;
+      if (markers[id]) map.removeLayer(markers[id]);
 
-      // 👤 自分の投稿だけ削除可能
-      if (currentUser && data.uid === currentUser.uid) {
-        popupContent += `
-          <button onclick="deletePost('${docId}')">
-            削除
-          </button>
+      let popup = `
+        <p>${d.text}</p>
+        <div class="time">🕒 ${formatDate(d.createdAt)}</div>
+      `;
+
+      if (currentUser && d.uid === currentUser.uid) {
+        popup += `
+          <button onclick="openEdit('${id}', '${d.text.replace(/'/g,"&#39;")}')">編集</button>
+          <button onclick="deletePost('${id}')">削除</button>
         `;
       }
 
-      const marker = L.marker([data.lat, data.lng])
+      const marker = L.marker([d.lat, d.lng])
         .addTo(map)
-        .bindPopup(popupContent);
+        .bindPopup(popup);
 
-      markers[docId] = marker;
+      markers[id] = marker;
     }
 
     if (change.type === "removed") {
-      if (markers[docId]) {
-        map.removeLayer(markers[docId]);
-        delete markers[docId];
+      if (markers[id]) {
+        map.removeLayer(markers[id]);
+        delete markers[id];
       }
     }
   });
 });
 
-/* 🖱️ 地図クリック（ログイン必須） */
+/* 🖱️ 投稿 */
 map.on("click", e => {
   if (!currentUser) {
-    alert("投稿するにはログイン（新規登録）が必要です");
+    alert("ログインが必要です");
     return;
   }
 
   const popup = `
-    <textarea id="text"></textarea><br>
-    <button onclick="savePost(${e.latlng.lat}, ${e.latlng.lng})">
-      投稿
-    </button>
+    <textarea id="newText"></textarea><br>
+    <button onclick="savePost(${e.latlng.lat}, ${e.latlng.lng})">投稿</button>
   `;
-  L.popup()
-    .setLatLng(e.latlng)
-    .setContent(popup)
-    .openOn(map);
+  L.popup().setLatLng(e.latlng).setContent(popup).openOn(map);
 });
 
-/* 💾 投稿保存 */
+/* 💾 新規投稿 */
 function savePost(lat, lng) {
-  if (!currentUser) return;
-
-  const text = document.getElementById("text").value;
+  const text = document.getElementById("newText").value;
   if (!text) return;
 
   db.collection("posts").add({
-    lat: lat,
-    lng: lng,
-    text: text,
+    lat,
+    lng,
+    text,
     uid: currentUser.uid,
     createdAt: firebase.firestore.FieldValue.serverTimestamp()
   });
@@ -176,16 +186,33 @@ function savePost(lat, lng) {
   map.closePopup();
 }
 
-/* 🗑️ 投稿削除（本人のみ） */
-function deletePost(postId) {
-  if (!currentUser) return;
+/* ✏️ 編集 */
+function openEdit(id, text) {
+  const popup = `
+    <textarea id="editText">${text}</textarea><br>
+    <button onclick="updatePost('${id}')">保存</button>
+  `;
+  markers[id].bindPopup(popup).openPopup();
+}
 
-  if (!confirm("この投稿を削除しますか？")) return;
+/* 💾 更新（日時は変更しない） */
+function updatePost(id) {
+  const text = document.getElementById("editText").value;
+  if (!text) return;
 
-  db.collection("posts").doc(postId).delete()
-    .catch(e => alert("削除できません"));
+  db.collection("posts").doc(id).update({ text });
+}
+
+/* 🗑️ 削除 */
+function deletePost(id) {
+  if (!confirm("削除しますか？")) return;
+  db.collection("posts").doc(id).delete();
 }
 </script>
 
 </body>
 </html>
+
+
+
+
