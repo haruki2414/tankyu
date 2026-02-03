@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
 <meta charset="UTF-8">
-<title>Firebase 地図掲示板（管理者削除対応）</title>
+<title>Firebase 地図掲示板（編集機能あり）</title>
 
 <!-- Leaflet -->
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
@@ -25,11 +25,10 @@
     padding: 10px;
     z-index: 1000;
     border-radius: 6px;
-    box-shadow: 0 0 5px rgba(0,0,0,0.3);
+    box-shadow: 0 0 5px rgba(0,0,0,.3);
   }
 
   textarea { width: 220px; height: 80px; }
-
   .nickname { font-weight: bold; }
   .time { font-size: 12px; color: #666; }
 </style>
@@ -37,12 +36,12 @@
 <body>
 
 <div id="auth">
-  <input id="email" type="email" placeholder="メールアドレス"><br>
+  <input id="email" type="email" placeholder="メール"><br>
   <input id="password" type="password" placeholder="パスワード"><br>
-  <input id="nicknameInput" placeholder="ニックネーム（初回のみ）"><br>
+  <input id="nicknameInput" placeholder="ニックネーム（初回）"><br>
   <button onclick="login()">ログイン</button>
   <button onclick="signup()">新規登録</button>
-  <p id="userInfo">ログインしていません</p>
+  <p id="userInfo">未ログイン</p>
 </div>
 
 <div id="map"></div>
@@ -62,21 +61,20 @@ firebase.initializeApp(firebaseConfig);
 const db = firebase.firestore();
 const auth = firebase.auth();
 
+const ADMIN_EMAIL = "icj210209@gmail.com";
+
 let currentUser = null;
 let currentNickname = "";
 let isAdmin = false;
 
-// ★ 管理者メール
-const ADMIN_EMAIL = "icj210209@gmail.com";
-
-/* 認証監視 */
+/* 認証状態監視 */
 auth.onAuthStateChanged(async user => {
   const info = document.getElementById("userInfo");
 
   if (!user) {
     currentUser = null;
     isAdmin = false;
-    info.textContent = "ログインしていません";
+    info.textContent = "未ログイン";
     return;
   }
 
@@ -87,7 +85,7 @@ auth.onAuthStateChanged(async user => {
   currentNickname = doc.exists ? doc.data().nickname : "名無し";
 
   info.textContent = isAdmin
-    ? `管理者ログイン中：${user.email}`
+    ? "管理者ログイン中"
     : `ログイン中：${currentNickname}`;
 });
 
@@ -116,17 +114,16 @@ function login() {
 const map = L.map("map").setView([36.3659, 140.4710], 14);
 L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png").addTo(map);
 
-/* マーカー管理 */
 const markers = {};
 
-/* 日時表示 */
+/* 日時整形 */
 function formatDate(ts) {
   if (!ts) return "";
   const d = ts.toDate();
   return `${d.getFullYear()}/${d.getMonth()+1}/${d.getDate()} ${d.getHours()}:${String(d.getMinutes()).padStart(2,"0")}`;
 }
 
-/* 投稿表示（管理者は全削除可） */
+/* 投稿表示 */
 db.collection("posts").onSnapshot(snapshot => {
   snapshot.docChanges().forEach(change => {
     const id = change.doc.id;
@@ -142,14 +139,23 @@ db.collection("posts").onSnapshot(snapshot => {
         <p>${d.text}</p>
       `;
 
-      // 👤 本人 or 管理者 は削除可能
-      if (
-        currentUser &&
-        (d.uid === currentUser.uid || isAdmin)
-      ) {
+      // 本人：編集＋削除
+      if (currentUser && d.uid === currentUser.uid) {
         popup += `
+          <button onclick="editPost('${id}', '${d.text.replace(/'/g,"\\'")}')">
+            編集
+          </button>
           <button onclick="deletePost('${id}')">
             削除
+          </button>
+        `;
+      }
+
+      // 管理者：削除のみ
+      if (currentUser && isAdmin && d.uid !== currentUser.uid) {
+        popup += `
+          <button onclick="deletePost('${id}')">
+            管理者削除
           </button>
         `;
       }
@@ -199,7 +205,18 @@ function savePost(lat, lng) {
   map.closePopup();
 }
 
-/* 削除（管理者OK） */
+/* 編集 */
+function editPost(id, oldText) {
+  const newText = prompt("内容を編集してください", oldText);
+  if (newText === null || newText.trim() === "") return;
+
+  db.collection("posts").doc(id).update({
+    text: newText,
+    editedAt: firebase.firestore.FieldValue.serverTimestamp()
+  });
+}
+
+/* 削除 */
 function deletePost(id) {
   if (!confirm("この投稿を削除しますか？")) return;
   db.collection("posts").doc(id).delete();
