@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
 <meta charset="UTF-8">
-<title>Firebase 地図掲示板</title>
+<title>Firebase 地図掲示板（管理者削除対応）</title>
 
 <!-- Leaflet -->
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
@@ -28,28 +28,18 @@
     box-shadow: 0 0 5px rgba(0,0,0,0.3);
   }
 
-  textarea {
-    width: 220px;
-    height: 80px;
-  }
+  textarea { width: 220px; height: 80px; }
 
-  .time {
-    font-size: 12px;
-    color: #666;
-    margin-top: 4px;
-  }
-
-  button {
-    margin-top: 4px;
-  }
+  .nickname { font-weight: bold; }
+  .time { font-size: 12px; color: #666; }
 </style>
 </head>
 <body>
 
 <div id="auth">
-  <h3>ログイン / 新規登録</h3>
   <input id="email" type="email" placeholder="メールアドレス"><br>
   <input id="password" type="password" placeholder="パスワード"><br>
+  <input id="nicknameInput" placeholder="ニックネーム（初回のみ）"><br>
   <button onclick="login()">ログイン</button>
   <button onclick="signup()">新規登録</button>
   <p id="userInfo">ログインしていません</p>
@@ -58,12 +48,11 @@
 <div id="map"></div>
 
 <script>
-/* 🔥 Firebase設定 */
+/* Firebase設定 */
 const firebaseConfig = {
   apiKey: "AIzaSyCe_0TVZeUqhxjd7UFflZ-dUamIehU7KWA",
   authDomain: "tankyu-6db3a.firebaseapp.com",
   projectId: "tankyu-6db3a",
-  storageBucket: "tankyu-6db3a.firebasestorage.app",
   messagingSenderId: "127226146209",
   appId: "1:127226146209:web:8b20840d3a325191c86fe0"
 };
@@ -72,107 +61,130 @@ firebase.initializeApp(firebaseConfig);
 
 const db = firebase.firestore();
 const auth = firebase.auth();
-let currentUser = null;
 
-/* 👤 認証状態監視 */
-auth.onAuthStateChanged(user => {
+let currentUser = null;
+let currentNickname = "";
+let isAdmin = false;
+
+// ★ 管理者メール
+const ADMIN_EMAIL = "icj210209@gmail.com";
+
+/* 認証監視 */
+auth.onAuthStateChanged(async user => {
   const info = document.getElementById("userInfo");
-  if (user) {
-    currentUser = user;
-    info.textContent = `ログイン中：${user.email}`;
-  } else {
+
+  if (!user) {
     currentUser = null;
+    isAdmin = false;
     info.textContent = "ログインしていません";
+    return;
   }
+
+  currentUser = user;
+  isAdmin = user.email === ADMIN_EMAIL;
+
+  const doc = await db.collection("users").doc(user.uid).get();
+  currentNickname = doc.exists ? doc.data().nickname : "名無し";
+
+  info.textContent = isAdmin
+    ? `管理者ログイン中：${user.email}`
+    : `ログイン中：${currentNickname}`;
 });
 
-/* 🔑 新規登録 */
-function signup() {
-  auth.createUserWithEmailAndPassword(email.value, password.value)
-    .catch(e => alert(e.message));
+/* 新規登録 */
+async function signup() {
+  if (!nicknameInput.value) {
+    alert("ニックネームを入力してください");
+    return;
+  }
+
+  const res = await auth.createUserWithEmailAndPassword(
+    email.value, password.value
+  );
+
+  await db.collection("users").doc(res.user.uid).set({
+    nickname: nicknameInput.value
+  });
 }
 
-/* 🔑 ログイン */
+/* ログイン */
 function login() {
-  auth.signInWithEmailAndPassword(email.value, password.value)
-    .catch(e => alert(e.message));
+  auth.signInWithEmailAndPassword(email.value, password.value);
 }
 
-/* 🗺️ 地図 */
+/* 地図 */
 const map = L.map("map").setView([36.3659, 140.4710], 14);
-L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png")
-  .addTo(map);
+L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png").addTo(map);
 
-/* 📍 マーカー管理 */
+/* マーカー管理 */
 const markers = {};
 
-/* 🕒 日時フォーマット関数 */
-function formatDate(timestamp) {
-  if (!timestamp) return "";
-  const d = timestamp.toDate();
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  const h = String(d.getHours()).padStart(2, "0");
-  const min = String(d.getMinutes()).padStart(2, "0");
-  return `${y}/${m}/${day} ${h}:${min}`;
+/* 日時表示 */
+function formatDate(ts) {
+  if (!ts) return "";
+  const d = ts.toDate();
+  return `${d.getFullYear()}/${d.getMonth()+1}/${d.getDate()} ${d.getHours()}:${String(d.getMinutes()).padStart(2,"0")}`;
 }
 
-/* 📥 投稿表示（日時・編集・削除） */
+/* 投稿表示（管理者は全削除可） */
 db.collection("posts").onSnapshot(snapshot => {
   snapshot.docChanges().forEach(change => {
     const id = change.doc.id;
 
     if (change.type === "added" || change.type === "modified") {
-      const d = change.doc.data();
-
       if (markers[id]) map.removeLayer(markers[id]);
 
+      const d = change.doc.data();
+
       let popup = `
-        <p>${d.text}</p>
+        <div class="nickname">${d.nickname}</div>
         <div class="time">🕒 ${formatDate(d.createdAt)}</div>
+        <p>${d.text}</p>
       `;
 
-      if (currentUser && d.uid === currentUser.uid) {
+      // 👤 本人 or 管理者 は削除可能
+      if (
+        currentUser &&
+        (d.uid === currentUser.uid || isAdmin)
+      ) {
         popup += `
-          <button onclick="openEdit('${id}', '${d.text.replace(/'/g,"&#39;")}')">編集</button>
-          <button onclick="deletePost('${id}')">削除</button>
+          <button onclick="deletePost('${id}')">
+            削除
+          </button>
         `;
       }
 
-      const marker = L.marker([d.lat, d.lng])
+      markers[id] = L.marker([d.lat, d.lng])
         .addTo(map)
         .bindPopup(popup);
-
-      markers[id] = marker;
     }
 
-    if (change.type === "removed") {
-      if (markers[id]) {
-        map.removeLayer(markers[id]);
-        delete markers[id];
-      }
+    if (change.type === "removed" && markers[id]) {
+      map.removeLayer(markers[id]);
+      delete markers[id];
     }
   });
 });
 
-/* 🖱️ 投稿 */
+/* 投稿 */
 map.on("click", e => {
   if (!currentUser) {
-    alert("ログインが必要です");
+    alert("ログインしてください");
     return;
   }
 
   const popup = `
-    <textarea id="newText"></textarea><br>
-    <button onclick="savePost(${e.latlng.lat}, ${e.latlng.lng})">投稿</button>
+    <textarea id="text"></textarea><br>
+    <button onclick="savePost(${e.latlng.lat}, ${e.latlng.lng})">
+      投稿
+    </button>
   `;
   L.popup().setLatLng(e.latlng).setContent(popup).openOn(map);
 });
 
-/* 💾 新規投稿 */
+/* 投稿保存 */
 function savePost(lat, lng) {
-  const text = document.getElementById("newText").value;
+  const text = document.getElementById("text").value;
   if (!text) return;
 
   db.collection("posts").add({
@@ -180,32 +192,16 @@ function savePost(lat, lng) {
     lng,
     text,
     uid: currentUser.uid,
+    nickname: currentNickname,
     createdAt: firebase.firestore.FieldValue.serverTimestamp()
   });
 
   map.closePopup();
 }
 
-/* ✏️ 編集 */
-function openEdit(id, text) {
-  const popup = `
-    <textarea id="editText">${text}</textarea><br>
-    <button onclick="updatePost('${id}')">保存</button>
-  `;
-  markers[id].bindPopup(popup).openPopup();
-}
-
-/* 💾 更新（日時は変更しない） */
-function updatePost(id) {
-  const text = document.getElementById("editText").value;
-  if (!text) return;
-
-  db.collection("posts").doc(id).update({ text });
-}
-
-/* 🗑️ 削除 */
+/* 削除（管理者OK） */
 function deletePost(id) {
-  if (!confirm("削除しますか？")) return;
+  if (!confirm("この投稿を削除しますか？")) return;
   db.collection("posts").doc(id).delete();
 }
 </script>
